@@ -1,168 +1,202 @@
+import { initPhysics, applyQuantumEffects, update4DObject, createBody, entangleObjects, world, engine } from './physics.js';
+
 let score = 0;
 let level = 1;
 let isPaused = false;
-let gameMode = 'single'; // 'single' or 'multi'
+let gameMode = 'single';
+let fourDObjects = [];
+let selectedObject = null;
 
 let levels = [
   { numObjects: 5, objective: 'Merge all objects', timeLimit: 60 },
   { numObjects: 10, objective: 'Avoid obstacles and merge', timeLimit: 60 },
 ];
 
-const { Engine, Render, Runner, World, Bodies, Body, Events } = Matter;
+let metacognitiveController = {
+  learningRate: 0.01,
+  explorationRate: 0.1,
+  strategy: 'random',
+  performanceHistory: [],
 
-const engine = Engine.create();
-const world = engine.world;
+  updateStrategy: function(performance) {
+    this.performanceHistory.push(performance);
+    if (this.performanceHistory.length > 10) {
+      this.performanceHistory.shift();
+    }
 
-let render;
-let runner;
-let fourDObjects = [];
+    const averagePerformance = this.performanceHistory.reduce((a, b) => a + b, 0) / this.performanceHistory.length;
+
+    if (averagePerformance < 0.3) {
+      this.strategy = 'exploratory';
+      this.explorationRate = 0.3;
+    } else if (averagePerformance < 0.7) {
+      this.strategy = 'balanced';
+      this.explorationRate = 0.1;
+    } else {
+      this.strategy = 'exploitative';
+      this.explorationRate = 0.05;
+    }
+
+    this.learningRate = Math.max(0.001, this.learningRate * 0.99);
+    
+    updateAIInfoDisplay();
+  }
+};
 
 document.addEventListener('DOMContentLoaded', () => {
-  const renderElement = document.getElementById('gameView');
-
-  if (renderElement) {
-    render = Render.create({
-      element: renderElement,
-      engine: engine,
-      options: {
-        width: renderElement.clientWidth,
-        height: renderElement.clientHeight,
-        wireframes: false,
-        background: '#f0f0f0'
-      }
-    });
-
-    Render.run(render);
-  }
-
-  runner = Runner.create();
-  Runner.run(runner, engine);
-
+  const gameViewElement = document.getElementById('gameView');
+  initPhysics(gameViewElement);
+  
   setupUserInterface();
   initializeGame();
-  startGame('single'); // Automatically start the game in single player mode
+  startGame('single');
+  
+  Matter.Events.on(engine, 'afterUpdate', updateGame);
 });
 
 function initializeGame() {
   createGameObjects(levels[level - 1].numObjects);
-  setupAI();
   setLevel(level);
 }
 
 function createGameObjects(numObjects) {
-  World.clear(world);
-  fourDObjects.length = 0;
-  const renderElement = document.getElementById('gameView');
+  World.clear(world, false);
+  fourDObjects = [];
+  const gameViewElement = document.getElementById('gameView');
+  
   for (let i = 0; i < numObjects; i++) {
-    const fourDObject = Bodies.circle(
-      Math.random() * renderElement.clientWidth,
-      Math.random() * renderElement.clientHeight,
-      20,
-      {
-        render: {
-          fillStyle: getRandomColor()
-        }
-      }
-    );
-    fourDObject.fourthDimension = Math.random() * Math.PI * 2;
-    fourDObjects.push(fourDObject);
-    World.add(world, fourDObject);
+    const x = Math.random() * gameViewElement.clientWidth;
+    const y = Math.random() * gameViewElement.clientHeight;
+    const radius = 20;
+    const body = createBody(x, y, radius, {
+      render: { fillStyle: getRandomColor() }
+    });
+    
+    fourDObjects.push(body);
+    World.add(world, body);
+  }
+
+  // Create some entangled pairs
+  for (let i = 0; i < numObjects / 2; i++) {
+    entangleObjects(fourDObjects[i * 2], fourDObjects[i * 2 + 1]);
   }
 }
 
 function updateGame() {
   if (isPaused) return;
+
   if (gameMode === 'single') {
-    executeAIStrategy();
+    const action = executeAIStrategy();
+    const performance = evaluatePerformance(action);
+    metacognitiveController.updateStrategy(performance);
   } else {
     // handle multiplayer logic
   }
-  checkObjectives();
+
+  applyQuantumEffects(fourDObjects);
   fourDObjects.forEach(update4DObject);
-}
-
-function setupUserInterface() {
-  const pauseButton = document.getElementById('pauseButton');
-  const resetButton = document.getElementById('resetButton');
-  const singlePlayerButton = document.getElementById('singlePlayerButton');
-  const multiPlayerButton = document.getElementById('multiPlayerButton');
-
-  pauseButton.addEventListener('click', togglePause);
-  resetButton.addEventListener('click', resetGame);
-  singlePlayerButton.addEventListener('click', () => startGame('single'));
-  multiPlayerButton.addEventListener('click', () => startGame('multi'));
-
-  updateScore(0);
-  setLevel(1);
-}
-
-function updateScore(newScore) {
-  score = newScore;
-  const scoreDisplay = document.getElementById('scoreDisplay');
-  if (scoreDisplay) {
-    scoreDisplay.innerHTML = `Score: ${score}`;
-  }
-}
-
-function setLevel(newLevel) {
-  level = newLevel;
-  const levelDisplay = document.getElementById('levelDisplay');
-  if (levelDisplay) {
-    levelDisplay.innerHTML = `Level: ${level}`;
-  }
-  createGameObjects(levels[level - 1].numObjects);
-}
-
-function setupAI() {
-  console.log("Setting up AI...");
+  checkObjectives();
+  updateObjectPropertiesDisplay();
 }
 
 function executeAIStrategy() {
-  fourDObjects.forEach(obj1 => {
-    let closestObj = null;
-    let closestDistance = Infinity;
-    fourDObjects.forEach(obj2 => {
-      if (obj1 !== obj2) {
-        const distance = Math.sqrt(Math.pow(obj1.position.x - obj2.position.x, 2) + Math.pow(obj1.position.y - obj2.position.y, 2));
-        if (distance < closestDistance) {
-          closestDistance = distance;
-          closestObj = obj2;
-        }
-      }
-    });
-
-    if (closestObj) {
-      const angle = Math.atan2(closestObj.position.y - obj1.position.y, closestObj.position.x - obj1.position.x);
-      Body.setVelocity(obj1, { x: Math.cos(angle), y: Math.sin(angle) });
-    }
-  });
+  let action;
+  if (Math.random() < metacognitiveController.explorationRate) {
+    action = exploreRandomAction();
+  } else {
+    action = exploitBestAction();
+  }
+  applyAction(action);
+  return action;
 }
 
-function togglePause() {
-  isPaused = !isPaused;
-  const pauseButton = document.getElementById('pauseButton');
-  if (pauseButton) {
-    pauseButton.innerHTML = isPaused ? 'Resume' : 'Pause';
+function exploreRandomAction() {
+  const actionTypes = ['merge', 'split', 'accelerate', 'decelerate', 'rotate'];
+  const randomAction = actionTypes[Math.floor(Math.random() * actionTypes.length)];
+  const randomObject = fourDObjects[Math.floor(Math.random() * fourDObjects.length)];
+  return { type: randomAction, object: randomObject };
+}
+
+function exploitBestAction() {
+  // Implement your best action selection logic here
+  // This could involve evaluating the current state and choosing the action
+  // that has historically led to the best outcomes
+  return exploreRandomAction(); // Placeholder for now
+}
+
+function applyAction(action) {
+  switch (action.type) {
+    case 'merge':
+      const nearbyObject = findNearestObject(action.object);
+      if (nearbyObject) {
+        interact4DObjects(action.object, nearbyObject);
+      }
+      break;
+    case 'split':
+      splitObject(action.object);
+      break;
+    case 'accelerate':
+      Body.setVelocity(action.object, {
+        x: action.object.velocity.x * 1.5,
+        y: action.object.velocity.y * 1.5
+      });
+      break;
+    case 'decelerate':
+      Body.setVelocity(action.object, {
+        x: action.object.velocity.x * 0.5,
+        y: action.object.velocity.y * 0.5
+      });
+      break;
+    case 'rotate':
+      Body.rotate(action.object, Math.PI / 4);
+      break;
   }
 }
 
-function resetGame() {
-  score = 0;
-  level = 1;
-  isPaused = false;
-  updateScore(score);
-  setLevel(level);
+function findNearestObject(obj) {
+  let nearest = null;
+  let minDistance = Infinity;
+  fourDObjects.forEach(other => {
+    if (other !== obj) {
+      const distance = Matter.Vector.magnitude(Matter.Vector.sub(obj.position, other.position));
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearest = other;
+      }
+    }
+  });
+  return nearest;
+}
+
+function splitObject(obj) {
+  if (obj.circleRadius > 10) {
+    const newRadius = obj.circleRadius / Math.sqrt(2);
+    const offset = 5;
+    const newObj1 = createBody(obj.position.x - offset, obj.position.y - offset, newRadius, {
+      render: { fillStyle: obj.render.fillStyle }
+    });
+    const newObj2 = createBody(obj.position.x + offset, obj.position.y + offset, newRadius, {
+      render: { fillStyle: obj.render.fillStyle }
+    });
+
+    World.remove(world, obj);
+    fourDObjects = fourDObjects.filter(o => o !== obj);
+    World.add(world, [newObj1, newObj2]);
+    fourDObjects.push(newObj1, newObj2);
+
+    newObj1.fourthDimension = obj.fourthDimension;
+    newObj2.fourthDimension = obj.fourthDimension;
+  }
+}
+
+function evaluatePerformance(action) {
+  // Implement performance evaluation logic here
+  // This could involve calculating a score based on the current game state,
+  // the action taken, and the resulting outcome
+  return Math.random(); // Placeholder for now
 }
 
 function checkObjectives() {
-  fourDObjects.forEach(obj1 => {
-    fourDObjects.forEach(obj2 => {
-      if (obj1 !== obj2 && areObjectsClose(obj1, obj2)) {
-        interact4DObjects(obj1, obj2);
-      }
-    });
-  });
-
   if (fourDObjects.length <= 1) {
     levelUp();
   }
@@ -174,13 +208,61 @@ function levelUp() {
   displayStatusMessage('Level up! Score +10');
 }
 
-function displayStatusMessage(message) {
-  const statusMessage = document.getElementById('statusMessage');
-  if (statusMessage) {
-    statusMessage.innerHTML = message;
-    setTimeout(() => {
-      statusMessage.innerHTML = '';
-    }, 2000);
+function updateScore(newScore) {
+  score = newScore;
+  document.getElementById('scoreDisplay').innerHTML = `Score: ${score}`;
+}
+
+function setLevel(newLevel) {
+  level = newLevel;
+  document.getElementById('levelDisplay').innerHTML = `Level: ${level}`;
+  createGameObjects(levels[level - 1].numObjects);
+}
+
+function setupUserInterface() {
+  document.getElementById('pauseButton').addEventListener('click', togglePause);
+  document.getElementById('resetButton').addEventListener('click', resetGame);
+  document.getElementById('singlePlayerButton').addEventListener('click', () => startGame('single'));
+  document.getElementById('multiPlayerButton').addEventListener('click', () => startGame('multi'));
+  
+  updateAIInfoDisplay();
+}
+
+function togglePause() {
+  isPaused = !isPaused;
+  document.getElementById('pauseButton').innerHTML = isPaused ? 'Resume' : 'Pause';
+}
+
+function resetGame() {
+  score = 0;
+  level = 1;
+  isPaused = false;
+  updateScore(score);
+  setLevel(level);
+  metacognitiveController.learningRate = 0.01;
+  metacognitiveController.explorationRate = 0.1;
+  metacognitiveController.strategy = 'random';
+  metacognitiveController.performanceHistory = [];
+  updateAIInfoDisplay();
+}
+
+function startGame(mode) {
+  gameMode = mode;
+  initializeGame();
+}
+
+function updateAIInfoDisplay() {
+  document.getElementById('strategyDisplay').innerHTML = `Strategy: ${metacognitiveController.strategy}`;
+  document.getElementById('explorationRateDisplay').innerHTML = `Exploration Rate: ${metacognitiveController.explorationRate.toFixed(2)}`;
+  document.getElementById('learningRateDisplay').innerHTML = `Learning Rate: ${metacognitiveController.learningRate.toFixed(4)}`;
+}
+
+function updateObjectPropertiesDisplay() {
+  if (selectedObject) {
+    document.getElementById('massDisplay').innerHTML = `Mass: ${selectedObject.properties.mass.toFixed(2)}`;
+    document.getElementById('chargeDisplay').innerHTML = `Charge: ${selectedObject.properties.charge.toFixed(2)}`;
+    document.getElementById('spinDisplay').innerHTML = `Spin: ${selectedObject.properties.spin.toFixed(2)}`;
+    document.getElementById('entanglementDisplay').innerHTML = `Entanglement: ${selectedObject.properties.entanglement ? 'Yes' : 'No'}`;
   }
 }
 
@@ -193,12 +275,22 @@ function getRandomColor() {
   return color;
 }
 
-function startGame(mode) {
-  gameMode = mode;
-  document.getElementById('menu').style.display = 'none';
-  document.getElementById('gameContainer').style.display = 'flex';
-  initializeGame();
+function displayStatusMessage(message) {
+  const statusMessage = document.getElementById('statusMessage');
+  statusMessage.innerHTML = message;
+  setTimeout(() => {
+    statusMessage.innerHTML = '';
+  }, 2000);
 }
+
+// Event listener for object selection
+document.getElementById('gameView').addEventListener('click', (event) => {
+  const mousePosition = Matter.Vector.create(event.clientX, event.clientY);
+  selectedObject = Matter.Query.point(fourDObjects, mousePosition)[0];
+  updateObjectPropertiesDisplay();
+});
+
+export { internalTrigger };
 
 function internalTrigger(action, mode) {
   switch(action) {
@@ -215,65 +307,3 @@ function internalTrigger(action, mode) {
       console.log("Invalid action");
   }
 }
-
-function areObjectsClose(obj1, obj2) {
-  const threshold = 10;
-  const dx = obj1.position.x - obj2.position.x;
-  const dy = obj1.position.y - obj2.position.y;
-  const dz = (obj1.position.z || 0) - (obj2.position.z || 0);
-  const dw = (obj1.position.w || 0) - (obj2.position.w || 0);
-
-  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz + dw * dw);
-
-  return distance < threshold;
-}
-
-function interact4DObjects(obj1, obj2) {
-  const mergedObject = Bodies.circle(
-    (obj1.position.x + obj2.position.x) / 2,
-    (obj1.position.y + obj2.position.y) / 2,
-    20,
-    {
-      render: {
-        fillStyle: getRandomColor()
-      }
-    }
-  );
-
-  fourDObjects = fourDObjects.filter(obj => obj !== obj1 && obj !== obj2);
-  World.remove(world, obj1);
-  World.remove(world, obj2);
-
-  fourDObjects.push(mergedObject);
-  World.add(world, mergedObject);
-}
-
-function update4DObject(object) {
-  object.fourthDimension += 0.01;
-  object.position.x += Math.sin(object.fourthDimension) * 0.5;
-  object.position.y += Math.cos(object.fourthDimension) * 0.5;
-  if (object.fourthDimension % (2 * Math.PI) < Math.PI) {
-    Body.scale(object, 1.001, 1.001);
-  } else {
-    Body.scale(object, 0.999, 0.999);
-  }
-}
-
-function handleResize() {
-  const renderElement = document.getElementById('gameView');
-  if (renderElement && render) {
-    render.canvas.width = renderElement.clientWidth;
-    render.canvas.height = renderElement.clientHeight;
-    render.options.width = renderElement.clientWidth;
-    render.options.height = renderElement.clientHeight;
-    Render.setPixelRatio(render, window.devicePixelRatio); // Ensure crisp rendering on high DPI displays
-  }
-}
-
-window.addEventListener('resize', handleResize);
-
-// Use Matter.js built-in update loop instead of setInterval
-Events.on(engine, 'beforeUpdate', updateGame);
-
-// Call handleResize once at the start to set the initial size
-handleResize();
