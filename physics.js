@@ -1,61 +1,129 @@
-const { Engine, Render, Runner, World, Bodies, Body, Events } = Matter;
+const { Engine, Render, Runner, World, Bodies, Body, Events, Vector } = Matter;
 
 const engine = Engine.create();
 const world = engine.world;
 
-const render = Render.create({
-  element: document.body,
-  engine: engine,
-  canvas: document.getElementById('gameCanvas'),
-  options: {
-    width: window.innerWidth,
-    height: window.innerHeight,
-    wireframes: false
-  }
-});
+let render;
+let runner;
 
-Render.run(render);
-const runner = Runner.create();
-Runner.run(runner, engine);
+function initPhysics(element) {
+    render = Render.create({
+        element: element,
+        engine: engine,
+        options: {
+            width: element.clientWidth,
+            height: element.clientHeight,
+            wireframes: false,
+            background: '#f0f0f0'
+        }
+    });
 
-const boundaries = [
-  Bodies.rectangle(window.innerWidth / 2, 0, window.innerWidth, 50, { isStatic: true }),
-  Bodies.rectangle(window.innerWidth / 2, window.innerHeight, window.innerWidth, 50, { isStatic: true }),
-  Bodies.rectangle(0, window.innerHeight / 2, 50, window.innerHeight, { isStatic: true }),
-  Bodies.rectangle(window.innerWidth, window.innerHeight / 2, 50, window.innerHeight, { isStatic: true })
-];
-World.add(world, boundaries);
+    Render.run(render);
+    runner = Runner.create();
+    Runner.run(runner, engine);
 
-const fourDObjects = [];
+    // Add 4D gravity effect
+    Events.on(engine, 'beforeUpdate', apply4DGravity);
+}
 
-Events.on(engine, 'beforeUpdate', () => {
-  fourDObjects.forEach(update4DObject);
-});
+function apply4DGravity() {
+    const objects = Composite.allBodies(world);
+    for (let i = 0; i < objects.length; i++) {
+        for (let j = i + 1; j < objects.length; j++) {
+            const bodyA = objects[i];
+            const bodyB = objects[j];
+            const force = calculate4DGravitationalForce(bodyA, bodyB);
+            Body.applyForce(bodyA, bodyA.position, force);
+            Body.applyForce(bodyB, bodyB.position, Vector.neg(force));
+        }
+    }
+}
+
+function calculate4DGravitationalForce(bodyA, bodyB) {
+    const G = 6.674e-11; // gravitational constant
+    const distanceVector = Vector.sub(bodyB.position, bodyA.position);
+    const distance = Vector.magnitude(distanceVector) + 1e-10; // avoid division by zero
+    const forceMagnitude = (G * bodyA.mass * bodyB.mass) / (distance * distance);
+    return Vector.mult(Vector.normalise(distanceVector), forceMagnitude);
+}
+
+function applyQuantumEffects(objects) {
+    objects.forEach(obj => {
+        // Quantum tunneling
+        if (Math.random() < 0.01) {
+            const tunnelDistance = (Math.random() - 0.5) * 50;
+            Body.setPosition(obj, {
+                x: obj.position.x + tunnelDistance,
+                y: obj.position.y + tunnelDistance
+            });
+        }
+
+        // Spin-orbit interaction
+        const spinForce = Vector.rotate(Vector.create(0.1, 0), obj.properties.spin);
+        Body.applyForce(obj, obj.position, spinForce);
+
+        // Charge interaction
+        objects.forEach(other => {
+            if (other !== obj) {
+                const chargeForce = calculateChargeForce(obj, other);
+                Body.applyForce(obj, obj.position, chargeForce);
+            }
+        });
+    });
+}
+
+function calculateChargeForce(objA, objB) {
+    const k = 8.99e9; // Coulomb's constant
+    const distanceVector = Vector.sub(objB.position, objA.position);
+    const distance = Vector.magnitude(distanceVector) + 1e-10; // avoid division by zero
+    const forceMagnitude = (k * objA.properties.charge * objB.properties.charge) / (distance * distance);
+    return Vector.mult(Vector.normalise(distanceVector), forceMagnitude);
+}
 
 function update4DObject(object) {
-  object.fourthDimension += 0.01;
-  object.position.x = 200 + 100 * Math.sin(object.fourthDimension);
-  object.position.y = 200 + 100 * Math.cos(object.fourthDimension);
+    object.fourthDimension += 0.01;
+    
+    // 4D rotation
+    const w = Math.sin(object.fourthDimension) * 0.5;
+    const x = object.position.x + Math.cos(object.fourthDimension) * w;
+    const y = object.position.y + Math.sin(object.fourthDimension) * w;
+    const z = Math.cos(object.fourthDimension) * 0.5;
 
-  if (object.fourthDimension % (2 * Math.PI) < Math.PI) {
-    Body.scale(object, 1.01, 1.01);
-  } else {
-    Body.scale(object, 0.99, 0.99);
-  }
+    Body.setPosition(object, { x, y });
+    
+    // 4D scaling
+    const scale = 1 + 0.1 * Math.sin(object.fourthDimension);
+    Body.scale(object, scale, scale);
 
-  fourDObjects.forEach(otherObject => {
-    if (object !== otherObject && areObjectsClose(object, otherObject)) {
-      interact4DObjects(object, otherObject);
-    }
-  });
+    // Apply forces based on object properties
+    const forceX = object.properties.charge * Math.cos(object.properties.spin) * 0.1;
+    const forceY = object.properties.charge * Math.sin(object.properties.spin) * 0.1;
+    Body.applyForce(object, object.position, { x: forceX, y: forceY });
 }
 
-function areObjectsClose(obj1, obj2) {
-  const distance = Math.sqrt(Math.pow(obj1.position.x - obj2.position.x, 2) + Math.pow(obj1.position.y - obj2.position.y, 2));
-  return distance < 50;
+function createBody(x, y, radius, options = {}) {
+    const body = Bodies.circle(x, y, radius, options);
+    body.properties = {
+        mass: options.mass || Math.random() * 10 + 1,
+        charge: options.charge || (Math.random() * 2 - 1),
+        spin: options.spin || Math.random() * 2 * Math.PI,
+        entanglement: null
+    };
+    body.fourthDimension = Math.random() * 2 * Math.PI;
+    return body;
 }
 
-function interact4DObjects(obj1, obj2) {
-  Body.scale(obj1, 1.05, 1.05);
-  Body.scale(obj2, 1.05, 1.05);
+function entangleObjects(obj1, obj2) {
+    obj1.properties.entanglement = obj2;
+    obj2.properties.entanglement = obj1;
 }
+
+export { 
+    initPhysics, 
+    applyQuantumEffects, 
+    update4DObject, 
+    createBody, 
+    entangleObjects,
+    world,
+    engine
+};
